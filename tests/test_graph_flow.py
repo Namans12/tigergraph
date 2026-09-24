@@ -128,3 +128,51 @@ async def test_shared_device_true_when_cluster_genuinely_coordinated_even_if_col
 
     assert state["shared_device"] is True
     assert state["shared_region"] is True
+
+
+# --- _customer_median_amount: fix from TASK14_ALL_FRAUD_DIAGNOSTIC.md ---
+# (a hardcoded $100 baseline for every card, regardless of its own spending)
+
+def test_customer_median_amount_computed_from_card_window_evidence():
+    state = {
+        "evidence": [
+            {"type": "card_window", "data": [
+                {"id": "T1", "TransactionAmt": 10.0},
+                {"id": "T2", "TransactionAmt": 20.0},
+                {"id": "T3", "TransactionAmt": 30.0},
+            ]},
+        ],
+    }
+    assert graph_flow._customer_median_amount(state) == 20.0
+
+
+def test_customer_median_amount_averages_the_middle_pair_for_even_count():
+    state = {
+        "evidence": [
+            {"type": "card_window", "data": [
+                {"id": "T1", "TransactionAmt": 10.0},
+                {"id": "T2", "TransactionAmt": 20.0},
+                {"id": "T3", "TransactionAmt": 30.0},
+                {"id": "T4", "TransactionAmt": 40.0},
+            ]},
+        ],
+    }
+    assert graph_flow._customer_median_amount(state) == 25.0
+
+
+def test_customer_median_amount_falls_back_to_default_when_no_history():
+    assert graph_flow._customer_median_amount({"evidence": []}) == 100.0
+    assert graph_flow._customer_median_amount({"evidence": []}, default=50.0) == 50.0
+
+
+def test_customer_median_amount_ignores_non_positive_amounts():
+    state = {
+        "evidence": [
+            {"type": "card_window", "data": [
+                {"id": "T1", "TransactionAmt": 0.0},
+                {"id": "T2", "TransactionAmt": -5.0},
+                {"id": "T3", "TransactionAmt": 40.0},
+            ]},
+        ],
+    }
+    assert graph_flow._customer_median_amount(state) == 40.0

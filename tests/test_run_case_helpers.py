@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.run.run_case import _grounded_similar_cases, _what_changed
+from src.run.run_case import _grounded_similar_cases, _reconcile_verdict, _what_changed
 from src.agent.schemas import ActionEntry
 
 
@@ -91,3 +91,40 @@ def test_what_changed_simulated_evidence_path():
         _action("VERIFY_WITH_CUSTOMER"), _action("BLOCK_CARD"),
     )
     assert "Simulated" in result
+
+
+# --- _reconcile_verdict: consistency fix from TASK14_ALL_FRAUD_DIAGNOSTIC.md ---
+
+def test_reconcile_verdict_plain_probability_thresholds_unchanged():
+    assert _reconcile_verdict(0.9, None) == "fraud"
+    assert _reconcile_verdict(0.1, None) == "legitimate"
+    assert _reconcile_verdict(0.5, None) == "uncertain"
+
+
+def test_reconcile_verdict_r3_confirmation_forces_legitimate_even_at_high_probability():
+    # R3: the customer confirmed the transaction themselves -- CLOSE_NO_FRAUD
+    # is policy_node's own final action; a "fraud" verdict would contradict it.
+    assert _reconcile_verdict(0.95, "confirmed_legitimate") == "legitimate"
+
+
+def test_reconcile_verdict_r7_recurring_downgrades_fraud_to_uncertain():
+    # R7 explicitly says "Do not block" -- "fraud"/"closed_fraud" cannot
+    # coexist with final actions that decline to block.
+    assert _reconcile_verdict(0.92, "disputes_recurring") == "uncertain"
+
+
+def test_reconcile_verdict_r7_recurring_does_not_touch_an_already_legitimate_verdict():
+    assert _reconcile_verdict(0.1, "disputes_recurring") == "legitimate"
+
+
+def test_reconcile_verdict_r7_recurring_does_not_touch_an_already_uncertain_verdict():
+    assert _reconcile_verdict(0.5, "disputes_recurring") == "uncertain"
+
+
+def test_reconcile_verdict_denies_and_no_reply_do_not_override_probability():
+    # R2 (denies) and R4 (no_reply) are meant to change the RECOMMENDED
+    # ACTIONS, not silently override the probability-derived verdict the
+    # way R3/R7 do -- only R3 and R7 carry a documented "this settles it"
+    # semantic that a plain denial or non-response doesn't.
+    assert _reconcile_verdict(0.92, "denies") == "fraud"
+    assert _reconcile_verdict(0.92, "no_reply") == "fraud"

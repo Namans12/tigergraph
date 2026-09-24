@@ -99,20 +99,39 @@ def cluster_burst_around(window: list[dict[str, Any]], flagged_txn_id: str) -> l
     """The flagged transaction plus every OTHER online transaction on this
     card within +/- CNP_BURST_WINDOW_HOURS of it -- README pattern 2's own
     definition ("a burst of two to four within 48 hours"). Always includes
-    the flagged transaction itself, even if channel/amount don't otherwise
+    the flagged transaction itself, even if amount doesn't otherwise
     qualify it, since it's the transaction under investigation by
     definition. Caps at CNP_BURST_MAX_TXNS (nearest in time to the flagged
     one) so an unrelated busy card doesn't get treated as one giant episode.
+
+    Bug fix (2026-09-24), found live by an external diagnostic run
+    (TASK14_ALL_FRAUD_DIAGNOSTIC.md) against a full 20-case batch: this
+    docstring always claimed "online transaction," but the code never
+    actually checked `channel` -- ANY nearby transaction counted, including
+    in_person ones, which cannot be part of a card-NOT-present pattern by
+    definition (README patterns 2/3 are explicitly about online use). 14 of
+    20 real cases fired this "burst" as a result, and the deterministic
+    override then force-labeled all of them card_not_present_fraud/
+    card_not_present_new_device -- a major contributor to a batch that came
+    back 20/20 fraud with none legitimate, against the README's own
+    expectation of roughly half legitimate.
+
+    If the FLAGGED transaction itself isn't online, this pattern cannot
+    apply at all (there is nothing "card-not-present" about an in-person
+    alert), so this returns just the flagged transaction with no burst.
     """
     rows = _sorted_by_ts(window)
     flagged = next(((t, ts) for t, ts in rows if t.get("id") == flagged_txn_id), None)
     if flagged is None:
         return [flagged_txn_id]
-    _, flagged_ts = flagged
+    flagged_row, flagged_ts = flagged
+    if flagged_row.get("channel") != "online":
+        return [flagged_txn_id]
     window_span = timedelta(hours=CNP_BURST_WINDOW_HOURS)
     candidates = [
         (t, ts) for t, ts in rows
-        if t.get("id") == flagged_txn_id or abs(ts - flagged_ts) <= window_span
+        if t.get("id") == flagged_txn_id
+        or (t.get("channel") == "online" and abs(ts - flagged_ts) <= window_span)
     ]
     candidates.sort(key=lambda pair: abs(pair[1] - flagged_ts))
     capped = candidates[:CNP_BURST_MAX_TXNS] if len(candidates) > CNP_BURST_MAX_TXNS else candidates
@@ -147,12 +166,26 @@ def detect_out_of_region(window: list[dict[str, Any]], flagged_txn_id: str) -> b
     reasons over a year of activity. Restricting the comparison to a
     genuinely concurrent window is what actually distinguishes "a trip"
     (this pattern's own stated non-example) from a real compromise.
+
+    Second bug fix (2026-09-24), same diagnostic run: this function never
+    required the flagged transaction to be CARD-PRESENT (`channel ==
+    "in_person"`), even though the README defines this pattern explicitly
+    as "Card-present purchases in a billing region..." -- an online
+    purchase's billing address says nothing about where the cardholder
+    physically was, so it can't evidence this pattern at all. Confirmed
+    live: 6 of 20 real cases fired this signal for an ONLINE flagged
+    transaction, and the deterministic override force-labeled all six
+    out_of_region_use. Combined with the CNP-burst bug above, these two
+    signals alone covered all 20 cases, leaving no room for the LLM to ever
+    reach "none."
     """
     rows = _sorted_by_ts(window)
     flagged = next(((t, ts) for t, ts in rows if t.get("id") == flagged_txn_id), None)
     if flagged is None or not flagged[0].get("addr1"):
         return False
     flagged_row, flagged_ts = flagged
+    if flagged_row.get("channel") != "in_person":
+        return False
     concurrent_window = timedelta(days=OUT_OF_REGION_CONCURRENT_WINDOW_DAYS)
     nearby = [
         (t, ts) for t, ts in rows

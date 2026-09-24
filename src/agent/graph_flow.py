@@ -538,18 +538,40 @@ def stopping_check(state: InvestigationState) -> str:
     return "request_evidence"
 
 
+def _customer_median_amount(state: InvestigationState, default: float = 100.0) -> float:
+    """Bug fix (2026-09-24), found live by an external diagnostic run
+    (TASK14_ALL_FRAUD_DIAGNOSTIC.md): this used to be a hardcoded $100
+    for every single case, regardless of the actual card's spending
+    pattern -- so a card that normally spends $20/transaction and one that
+    normally spends $2,000/transaction got compared against the exact same
+    baseline. card_window's own evidence already has this card's real
+    transaction history; the median of it is right there."""
+    window = next(
+        (e["data"] for e in (state.get("evidence") or []) if e["type"] == "card_window"), []
+    )
+    amounts = sorted(
+        float(t["TransactionAmt"]) for t in window
+        if isinstance(t.get("TransactionAmt"), (int, float)) and t["TransactionAmt"] > 0
+    )
+    if not amounts:
+        return default
+    mid = len(amounts) // 2
+    if len(amounts) % 2:
+        return amounts[mid]
+    return (amounts[mid - 1] + amounts[mid]) / 2
+
+
 async def evidence_request_node(state: InvestigationState) -> InvestigationState:
     row = state["case_row"]
     flagged_amount = _flagged_amount(row)
     response = simulate_evidence_response(
         "customer_validation",
         flagged_amount=flagged_amount or 100.0,
-        customer_median_amount=100.0,
+        customer_median_amount=_customer_median_amount(state),
         # Real signal now (see gather_evidence_node) -- previously this was
         # `shared_device`, a different fact entirely (device sharing across
         # cards, not device newness for this account).
         is_new_device=state.get("is_new_device", False),
-        fraud_probability=state["assessment"]["fraud_probability"],
     )
     request = {
         "type": "customer_validation",
@@ -626,6 +648,7 @@ async def policy_node(state: InvestigationState) -> InvestigationState:
         final_result = apply_policy(final_findings)
         stop_reason = "Simulated customer response settled the verdict."
     else:
+        customer_response = None
         final_result = initial_result
         stop_reason = "Fraud probability reached a decisive threshold with sufficient evidence."
 
@@ -634,6 +657,15 @@ async def policy_node(state: InvestigationState) -> InvestigationState:
         "initial_policy_result": initial_result.model_dump(),
         "final_policy_result": final_result.model_dump(),
         "stop_reason": stop_reason,
+        # Answer-quality fix (2026-09-24), found live by an external
+        # diagnostic (TASK14_ALL_FRAUD_DIAGNOSTIC.md): this was a LOCAL
+        # variable, invisible outside policy_node -- so run_case.py had no
+        # way to know an R3 confirmation or an R7 recurring-charge match
+        # had settled the question, and could still report a verdict of
+        # "fraud"/status "closed_fraud" straight from the raw probability
+        # even when the policy's own final actions said VERIFY/WARN, not
+        # BLOCK. Exposed here so the verdict can be reconciled with it.
+        "customer_response": customer_response,
     }
 
 

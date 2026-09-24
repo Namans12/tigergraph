@@ -64,7 +64,6 @@ def test_simulator_anomalous_amount_denies():
         flagged_amount=500.0,
         customer_median_amount=50.0,
         is_new_device=False,
-        fraud_probability=0.7,
     )
     assert "did not make" in response
 
@@ -133,6 +132,23 @@ def test_simulator_typical_amount_confirms():
         flagged_amount=52.0,
         customer_median_amount=50.0,
         is_new_device=False,
-        fraud_probability=0.2,
     )
     assert "confirms" in response
+
+
+def test_simulator_signature_no_longer_accepts_fraud_probability():
+    # Regression test: found live by an external diagnostic
+    # (TASK14_ALL_FRAUD_DIAGNOSTIC.md) -- a high fraud_probability alone
+    # used to force a simulated denial (circular: the model's own uncertain
+    # guess became "independent" confirming evidence, feeding right back
+    # into reassess_node). Asserting the parameter is gone (a TypeError on
+    # the old call shape) is the real guarantee here -- if it's ever added
+    # back, this fails loudly rather than silently reintroducing the loop.
+    with pytest.raises(TypeError):
+        simulate_evidence_response(
+            "customer_validation",
+            flagged_amount=500.0,
+            customer_median_amount=50.0,
+            is_new_device=False,
+            fraud_probability=0.9,  # type: ignore[call-arg]
+        )

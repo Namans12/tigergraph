@@ -27,5 +27,6 @@ class InvestigationState(TypedDict, total=False):
     evidence_requests: list[dict[str, Any]]
     initial_policy_result: dict[str, Any]
     final_policy_result: dict[str, Any]
+    customer_response: str | None  # "denies" | "confirmed_legitimate" | "disputes_recurring" | "no_reply" | None -- set by policy_node
     tool_calls: int
     stop_reason: str

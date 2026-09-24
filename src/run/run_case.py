@@ -43,11 +43,7 @@ async def run_single_case_with_context(tg: TigerGraphMCP, case_row: dict) -> tup
     final_actions = [ActionEntry(**a) for a in final_state["final_policy_result"]["actions"]]
     sar_info = final_state["final_policy_result"]
 
-    verdict = (
-        "fraud" if assessment["fraud_probability"] >= 0.7
-        else "legitimate" if assessment["fraud_probability"] <= 0.15
-        else "uncertain"
-    )
+    verdict = _reconcile_verdict(assessment["fraud_probability"], final_state.get("customer_response"))
     status = (
         "closed_fraud" if verdict == "fraud"
         else "closed_legitimate" if verdict == "legitimate"
@@ -146,6 +142,36 @@ async def run_single_case_with_context(tg: TigerGraphMCP, case_row: dict) -> tup
         "connected_card_ids": connected_card_ids,
     }
     return answer, context
+
+
+def _reconcile_verdict(fraud_probability: float, customer_response: str | None) -> str:
+    """Consistency fix (2026-09-24), found live by an external diagnostic
+    (TASK14_ALL_FRAUD_DIAGNOSTIC.md) against a full 20-case batch: the
+    verdict used to be derived purely from the raw probability threshold,
+    even when policy_node's own customer_response said the question was
+    already settled a different way -- producing answer files that were
+    structurally valid but self-contradictory (e.g. a "closed_fraud" case
+    whose final actions were VERIFY_WITH_CUSTOMER + WARN_CUSTOMER under R7,
+    never a block at all). Reconciled here against the SAME signal
+    policy_node already used to pick the final actions, not a second,
+    independent guess."""
+    verdict = (
+        "fraud" if fraud_probability >= 0.7
+        else "legitimate" if fraud_probability <= 0.15
+        else "uncertain"
+    )
+    if customer_response == "confirmed_legitimate":
+        # R3: the customer confirmed it themselves -- CLOSE_NO_FRAUD is
+        # policy_node's own final action here; the verdict must agree.
+        return "legitimate"
+    if customer_response == "disputes_recurring" and verdict == "fraud":
+        # R7: "Do not block" is the rule's own text -- a verdict of "fraud"/
+        # "closed_fraud" cannot coexist with final actions that explicitly
+        # decline to block. Downgraded, not flipped to "legitimate" outright:
+        # R7 still calls for VERIFY_WITH_CUSTOMER, i.e. genuine uncertainty,
+        # not a confirmed clearance.
+        return "uncertain"
+    return verdict
 
 
 def _grounded_similar_cases(final_state: dict, llm_ids: list[str]) -> list[str]:

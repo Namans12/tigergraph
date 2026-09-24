@@ -80,25 +80,68 @@ def test_cluster_burst_around_missing_flagged_txn_returns_just_that_id():
     assert result == ["NOT_IN_WINDOW"]
 
 
+def test_cluster_burst_around_excludes_nearby_in_person_transactions():
+    # Regression test: found live by an external diagnostic
+    # (TASK14_ALL_FRAUD_DIAGNOSTIC.md) against a full 20-case batch -- this
+    # function's own docstring always said "online transaction," but the
+    # code never checked `channel`, so an in-person purchase minutes away
+    # counted as part of a "card-not-present burst," which is a
+    # contradiction in terms. 14 of 20 real cases fired this bug.
+    window = [
+        _txn("T1", "2016-11-11 23:00:00", 50.0, channel="in_person"),
+        _txn("T2", "2016-11-11 23:46:24", 100.09, channel="online"),  # flagged
+        _txn("T3", "2016-11-12 00:10:00", 80.0, channel="in_person"),
+    ]
+    result = cluster_burst_around(window, "T2")
+    assert result == ["T2"]
+
+
+def test_cluster_burst_around_returns_only_flagged_when_flagged_is_in_person():
+    # A card-not-present pattern cannot apply to an in-person alert at all.
+    window = [
+        _txn("T1", "2016-11-11 23:00:00", 50.0, channel="online"),
+        _txn("T2", "2016-11-11 23:46:24", 100.09, channel="in_person"),  # flagged
+    ]
+    result = cluster_burst_around(window, "T2")
+    assert result == ["T2"]
+
+
 def test_detect_out_of_region_true_when_flagged_region_differs_with_home_activity():
     window = [
         _txn("HOME1", "2016-11-10 08:00:00", 20.0, addr1="100.0"),
         _txn("HOME2", "2016-11-11 08:00:00", 25.0, addr1="100.0"),
-        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, addr1="999.0"),
+        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="in_person", addr1="999.0"),
     ]
     assert detect_out_of_region(window, "FLAGGED") is True
+
+
+def test_detect_out_of_region_false_when_flagged_is_online_even_if_otherwise_qualifying():
+    # Regression test: found live by an external diagnostic
+    # (TASK14_ALL_FRAUD_DIAGNOSTIC.md) against a full 20-case batch --
+    # detect_out_of_region never required the flagged transaction to be
+    # channel="in_person", even though the README defines this pattern as
+    # explicitly card-PRESENT ("Card-present purchases in a billing region
+    # ..."). An online purchase's billing address says nothing about where
+    # the cardholder physically was. 6 of 20 real cases fired this signal
+    # for an ONLINE flagged transaction before this fix.
+    window = [
+        _txn("HOME1", "2016-11-10 08:00:00", 20.0, addr1="100.0"),
+        _txn("HOME2", "2016-11-11 08:00:00", 25.0, addr1="100.0"),
+        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="online", addr1="999.0"),
+    ]
+    assert detect_out_of_region(window, "FLAGGED") is False
 
 
 def test_detect_out_of_region_false_when_flagged_matches_home_region():
     window = [
         _txn("HOME1", "2016-11-10 08:00:00", 20.0, addr1="100.0"),
-        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, addr1="100.0"),
+        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="in_person", addr1="100.0"),
     ]
     assert detect_out_of_region(window, "FLAGGED") is False
 
 
 def test_detect_out_of_region_false_with_no_other_history():
-    window = [_txn("FLAGGED", "2016-11-11 20:00:00", 90.0, addr1="999.0")]
+    window = [_txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="in_person", addr1="999.0")]
     assert detect_out_of_region(window, "FLAGGED") is False
 
 
@@ -113,7 +156,7 @@ def test_detect_out_of_region_false_when_no_concurrent_home_activity():
     # ("while their normal activity continues at home").
     window = [
         _txn("OLD_HOME", "2016-03-01 08:00:00", 20.0, addr1="100.0"),  # 8+ months before flagged
-        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, addr1="999.0"),
+        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="in_person", addr1="999.0"),
     ]
     assert detect_out_of_region(window, "FLAGGED") is False
 
@@ -126,7 +169,7 @@ def test_detect_out_of_region_true_only_when_home_activity_is_concurrent():
         _txn("STALE", "2016-01-01 08:00:00", 5.0, addr1="100.0"),
         _txn("HOME1", "2016-11-10 08:00:00", 20.0, addr1="100.0"),
         _txn("HOME2", "2016-11-11 08:00:00", 25.0, addr1="100.0"),
-        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, addr1="999.0"),
+        _txn("FLAGGED", "2016-11-11 20:00:00", 90.0, channel="in_person", addr1="999.0"),
     ]
     assert detect_out_of_region(window, "FLAGGED") is True
 

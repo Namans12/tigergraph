@@ -227,6 +227,27 @@ async def run_all(
         f"{batch_summary['cases_valid']}/{len(summary_cases)} valid, {len(errors)} failed.",
         flush=True,
     )
+    # Distribution sanity check (2026-09-24), added directly in response to
+    # an external diagnostic (TASK14_ALL_FRAUD_DIAGNOSTIC.md): structural
+    # validation alone missed a real batch that came back 20/20 fraud, 0
+    # legitimate, 0 uncertain -- every file was individually well-formed,
+    # but the DISTRIBUTION was not credible against the README's own
+    # explicit expectation ("roughly half the cases are legitimate...an
+    # agent that blocks everything scores badly"). This is a loud,
+    # print-only warning, not a hard failure (a small --case-ids rerun can
+    # legitimately be all-fraud by chance), but a near-full run landing on
+    # an all-fraud or all-legitimate distribution should never pass unread.
+    if len(summary_cases) >= 15:
+        legit = verdict_counts.get("legitimate", 0)
+        fraud = verdict_counts.get("fraud", 0)
+        if legit == 0 or fraud == len(summary_cases):
+            print(
+                f"\n*** DISTRIBUTION WARNING: {fraud}/{len(summary_cases)} cases came back "
+                f"'fraud' and {legit} 'legitimate'. The README explicitly expects roughly "
+                f"half the case pack to be legitimate -- do not submit this batch without "
+                f"investigating why before trusting it. ***",
+                flush=True,
+            )
     return batch_summary
 
 
