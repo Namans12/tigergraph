@@ -1,4 +1,50 @@
-# TigerGraph × Hacker House Goa — Fraud Investigation Dataset (IEEE-CIS edition)
+# Running this project
+
+The section below is ours, added for submission; the task spec starts at
+"TigerGraph × Hacker House Goa" further down and is unmodified.
+
+## Backend (TigerGraph + the investigation agent)
+
+1. `python -m venv .venv && .venv\Scripts\pip install -r requirements.txt`
+2. Copy `.env.example` to `.env`, fill in your TigerGraph Savanna workspace
+   credentials and a free Groq API key from `https://console.groq.com`
+   (`GROQ_API_KEY`). Set `LLM_BACKEND=ollama` instead to run fully local/free
+   (needs `ollama pull qwen3:4b-instruct && ollama pull nomic-embed-text`
+   either way -- embeddings always use the local model).
+3. One-time graph setup (run in order, from the repo root):
+   ```bash
+   python -m scripts.create_schema
+   python -m scripts.load_data
+   python -m scripts.derive_entities
+   python -m scripts.run_connected_components
+   python -m scripts.ingest_knowledge
+   ```
+4. Run the batch: `python -m scripts.run_batch` — produces
+   `cases/HHG-001.json` … `cases/HHG-020.json` and
+   `runs/latest/batch_summary.json` + `runs/latest/traces/*.trace.json`.
+   `--case-ids HHG-001,HHG-002 --merge` reruns a subset without redoing the
+   rest (see `docs/TEAMMATE_BATCH_RUN.md` for the full runbook, including
+   recovery from a rate-limited or interrupted run).
+5. Validate: `python -m src.run.validate_outputs cases` — expect
+   `20/20 files passed.`
+
+Design doc: `docs/superpowers/specs/2026-09-22-tigergraph-fraud-agent-design.md`
+Implementation plan: `docs/superpowers/plans/2026-09-22-tigergraph-fraud-agent-plan.md`
+
+## Frontend (investigation console UI)
+
+The UI lives in `ui/` (a separate npm project; see `docs/frontend-spec.md` for
+the full design/contract). From `ui/`:
+
+```bash
+npm install
+npm run sync-data          # copies ../cases + ../runs/latest into ui/public/data
+npm run dev                # local preview at http://localhost:5173
+# or: npm run build        # static production build
+```
+
+---
+
 
 Six months of card transactions from the **IEEE-CIS Fraud Detection** dataset, published by Vesta Corporation, with **every original row and every original column kept**. Two things changed: the yes/no fraud label is gone, and every transaction carries a **risk score** from the bank's detection model instead. On top sit the things an investigation needs: customers, a real calendar, a channel, the bank's closed cases, and the 20 cases you'll be judged on.
 
